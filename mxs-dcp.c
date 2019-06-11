@@ -245,12 +245,12 @@ static int mxs_dcp_run_aes(struct dcp_async_ctx *actx,
 		dcp_len = AES_KEYSIZE_128 + AES_BLOCK_SIZE;
 	}
 
-	dma_addr_t dcp_phys = dma_map_single(sdcp->dev, sdcp->coh->aes_key,
+	dcp_phys = dma_map_single(sdcp->dev, sdcp->coh->aes_key,
 					     dcp_len,
 					     DMA_TO_DEVICE);
-	dma_addr_t src_phys = dma_map_single(sdcp->dev, sdcp->coh->aes_in_buf,
+	src_phys = dma_map_single(sdcp->dev, sdcp->coh->aes_in_buf,
 					     DCP_BUF_SZ, DMA_TO_DEVICE);
-	dma_addr_t dst_phys = dma_map_single(sdcp->dev, sdcp->coh->aes_out_buf,
+	dst_phys = dma_map_single(sdcp->dev, sdcp->coh->aes_out_buf,
 					     DCP_BUF_SZ, DMA_FROM_DEVICE);
 
 	if (actx->fill % AES_BLOCK_SIZE) {
