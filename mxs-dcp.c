@@ -82,7 +82,6 @@ struct dcp {
 	spinlock_t			lock[DCP_MAX_CHANS];
 	struct task_struct		*thread[DCP_MAX_CHANS];
 	struct crypto_queue		queue[DCP_MAX_CHANS];
-	struct clk			*dcp_clk;
 };
 
 enum dcp_chan {
@@ -246,12 +245,12 @@ static int mxs_dcp_run_aes(struct dcp_async_ctx *actx,
 		dcp_len = AES_KEYSIZE_128 + AES_BLOCK_SIZE;
 	}
 
-	dcp_phys = dma_map_single(sdcp->dev, sdcp->coh->aes_key,
+	dma_addr_t dcp_phys = dma_map_single(sdcp->dev, sdcp->coh->aes_key,
 					     dcp_len,
 					     DMA_TO_DEVICE);
-	src_phys = dma_map_single(sdcp->dev, sdcp->coh->aes_in_buf,
+	dma_addr_t src_phys = dma_map_single(sdcp->dev, sdcp->coh->aes_in_buf,
 					     DCP_BUF_SZ, DMA_TO_DEVICE);
-	dst_phys = dma_map_single(sdcp->dev, sdcp->coh->aes_out_buf,
+	dma_addr_t dst_phys = dma_map_single(sdcp->dev, sdcp->coh->aes_out_buf,
 					     DCP_BUF_SZ, DMA_FROM_DEVICE);
 
 	if (actx->fill % AES_BLOCK_SIZE) {
@@ -567,10 +566,11 @@ static int mxs_dcp_aes_setkey(struct crypto_ablkcipher *tfm, const u8 *key,
 static int mxs_dcp_aes_fallback_init(struct crypto_tfm *tfm)
 {
 	const char *name = crypto_tfm_alg_name(tfm);
+	const uint32_t flags = CRYPTO_ALG_ASYNC | CRYPTO_ALG_NEED_FALLBACK;
 	struct dcp_async_ctx *actx = crypto_tfm_ctx(tfm);
 	struct crypto_skcipher *blk;
 
-	blk = crypto_alloc_skcipher(name, 0, CRYPTO_ALG_NEED_FALLBACK);
+	blk = crypto_alloc_skcipher(name, 0, flags);
 	if (IS_ERR(blk))
 		return PTR_ERR(blk);
 
@@ -597,6 +597,7 @@ static int mxs_dcp_run_sha(struct ahash_request *req)
 	struct crypto_ahash *tfm = crypto_ahash_reqtfm(req);
 	struct dcp_async_ctx *actx = crypto_ahash_ctx(tfm);
 	struct dcp_sha_req_ctx *rctx = ahash_request_ctx(req);
+
 	struct dcp_dma_desc *desc = &sdcp->coh->desc[actx->chan];
 
 	dma_addr_t digest_phys = 0;
