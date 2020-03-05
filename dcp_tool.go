@@ -1,5 +1,5 @@
 // NXP Data Co-Processor (DCP)
-// https://github.com/inversepath/mxs-dcp
+// https://github.com/f-secure-foundry/mxs-dcp
 //
 // userspace driver reference example
 //
@@ -114,7 +114,7 @@ func main() {
 	}
 
 	if len(diversifier) > 1 {
-		log.Fatalf("dcp_tool: error, diversifier must be a single hex value (e.g. ab)")
+		log.Fatalf("dcp_tool: error, diversifier must be a single byte value in hex format (e.g. ab)")
 	}
 
 	input, err := os.OpenFile(inputPath, os.O_RDONLY|os.O_EXCL, 0600)
@@ -237,7 +237,7 @@ func DCPDeriveKey(diversifier []byte, iv []byte) (key []byte, err error) {
 	return cryptoAPI(apifd, unix.ALG_OP_ENCRYPT, iv, pad(diversifier, false))
 }
 
-// adapted from github.com/inversepath/interlock/internal/aes
+// adapted from github.com/f-secure-foundry/interlock/internal/aes
 func encryptOFB(key []byte, iv []byte, input *os.File, output *os.File) (err error) {
 	block, err := aes.NewCipher(key)
 
@@ -287,7 +287,7 @@ func encryptOFB(key []byte, iv []byte, input *os.File, output *os.File) (err err
 	return
 }
 
-// adapted from github.com/inversepath/interlock/internal/aes
+// adapted from github.com/f-secure-foundry/interlock/internal/aes
 func decryptOFB(key []byte, iv []byte, input *os.File, output *os.File) (err error) {
 	block, err := aes.NewCipher(key)
 
