@@ -3,7 +3,7 @@
 //
 // userspace driver reference example
 //
-// Copyright (c) F-Secure Corporation
+// Copyright (c) WithSecure Corporation
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the Free
@@ -21,7 +21,8 @@
 // each SoC, is used. The secure operation of the DCP and SNVS, in production
 // deployments, should always be paired with Secure Boot activation.
 //
-//+build linux
+//go:build linux
+// +build linux
 
 package main
 
@@ -44,7 +45,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Symmetric file encryption using AES-128-OFB, key is derived from a known
+// Symmetric file encryption using AES-128-CTR, key is derived from a known
 // diversifier encrypted with AES-128-CBC through the NXP Data Co-Processor
 // (DCP) with its device specific secret key. This uniquely ties the derived
 // key to the specific hardware unit being used.
@@ -88,9 +89,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	op := flag.Arg(0)
+	cmd := flag.Arg(0)
 
-	switch op {
+	switch cmd {
 	case "enc":
 		inputPath = flag.Arg(1)
 		outputPath = flag.Arg(2)
@@ -98,12 +99,14 @@ func main() {
 		outputPath = flag.Arg(1)
 		inputPath = flag.Arg(2)
 	default:
-		log.Fatal("dcp_tool: error, invalid operation")
+		log.Fatal("dcp_aes_kdf: error, invalid argument")
 	}
 
 	defer func() {
 		if err != nil {
-			log.Fatalf("dcp_tool: error, %v", err)
+			log.Fatalf("dcp_aes_kdf: error, %v", err)
+		} else {
+			log.Println("dcp_aes_kdf: done")
 		}
 	}()
 
@@ -114,7 +117,7 @@ func main() {
 	}
 
 	if len(diversifier) > 1 {
-		log.Fatalf("dcp_tool: error, diversifier must be a single byte value in hex format (e.g. ab)")
+		log.Fatalf("dcp_aes_kdf: error, diversifier must be a single byte value in hex format (e.g. ab)")
 	}
 
 	input, err := os.OpenFile(inputPath, os.O_RDONLY|os.O_EXCL, 0600)
@@ -131,66 +134,45 @@ func main() {
 	}
 	defer output.Close()
 
-	log.Printf("dcp_tool: %s %s to %s", op, inputPath, outputPath)
+	log.Printf("dcp_aes_kdf: %s %s to %s", cmd, inputPath, outputPath)
 
-	switch op {
+	err = op(input, output, diversifier, cmd)
+}
+
+func op(input *os.File, output *os.File, diversifier []byte, cmd string) (err error) {
+	// It is advised to use only deterministic input data for key
+	// derivation, therefore we use the empty allocated IV before it being
+	// filled.
+	iv := make([]byte, aes.BlockSize)
+	key, err := DCPDeriveKey(diversifier, iv)
+
+	if err != nil {
+		return
+	}
+
+	switch cmd {
 	case "enc":
-		err = encrypt(input, output, diversifier)
+		if _, err = io.ReadFull(rand.Reader, iv); err != nil {
+			return
+		}
+
+		return encryptCTR(key, iv, input, output)
 	case "dec":
-		err = decrypt(input, output, diversifier)
+		if _, err = io.ReadFull(input, iv); err != nil {
+			return
+		}
+
+		return decryptCTR(key, iv, input, output)
 	}
 
-	if err == nil {
-		log.Println("dcp_tool: done")
-	}
-}
-
-func encrypt(input *os.File, output *os.File, diversifier []byte) (err error) {
-	// It is advised to use only deterministic input data for key
-	// derivation, therefore we use the empty allocated IV before it being
-	// filled.
-	iv := make([]byte, aes.BlockSize)
-	key, err := DCPDeriveKey(diversifier, iv)
-
-	if err != nil {
-		return
-	}
-	_, err = io.ReadFull(rand.Reader, iv)
-
-	if err != nil {
-		return
-	}
-
-	err = encryptOFB(key, iv, input, output)
-
-	return
-}
-
-func decrypt(input *os.File, output *os.File, diversifier []byte) (err error) {
-	// It is advised to use only deterministic input data for key
-	// derivation, therefore we use the empty allocated IV before it being
-	// filled.
-	iv := make([]byte, aes.BlockSize)
-	key, err := DCPDeriveKey(diversifier, iv)
-
-	if err != nil {
-		return
-	}
-
-	_, err = io.ReadFull(input, iv)
-
-	if err != nil {
-		return
-	}
-
-	err = decryptOFB(key, iv, input, output)
-
-	return
+	return errors.New("invalid argument")
 }
 
 // equivalent to PKCS#11 C_DeriveKey with CKM_AES_CBC_ENCRYPT_DATA
 func DCPDeriveKey(diversifier []byte, iv []byte) (key []byte, err error) {
-	log.Printf("dcp_tool: deriving key, diversifier %x", diversifier)
+	var aes_key string
+
+	log.Printf("dcp_aes_kdf: deriving key, diversifier %x", diversifier)
 
 	fd, err := unix.Socket(unix.AF_ALG, unix.SOCK_SEQPACKET, 0)
 
@@ -205,30 +187,17 @@ func DCPDeriveKey(diversifier []byte, iv []byte) (key []byte, err error) {
 	}
 
 	if test {
-		addr.Type = "skcipher"
 		addr.Name = "cbc(aes)"
+		aes_key = TEST_KEY
+	} else {
+		aes_key = "" // Empty key: Use DCP internal key
 	}
 
-	err = unix.Bind(fd, addr)
-
-	if err != nil {
+	if err = unix.Bind(fd, addr); err != nil {
 		return
 	}
 
-	if test {
-		err = syscall.SetsockoptString(fd, unix.SOL_ALG, unix.ALG_SET_KEY, TEST_KEY)
-	} else {
-		// https://github.com/golang/go/issues/31277
-		// SetsockoptString does not allow empty strings
-		_, _, e1 := syscall.Syscall6(syscall.SYS_SETSOCKOPT, uintptr(fd), uintptr(unix.SOL_ALG), uintptr(unix.ALG_SET_KEY), uintptr(0), uintptr(0), 0)
-
-		if e1 != 0 {
-			err = errors.New("setsockopt failed")
-			return
-		}
-	}
-
-	if err != nil {
+	if err = syscall.SetsockoptString(fd, unix.SOL_ALG, unix.ALG_SET_KEY, aes_key); err != nil {
 		return
 	}
 
@@ -237,24 +206,21 @@ func DCPDeriveKey(diversifier []byte, iv []byte) (key []byte, err error) {
 	return cryptoAPI(apifd, unix.ALG_OP_ENCRYPT, iv, pad(diversifier, false))
 }
 
-// adapted from github.com/usbarmory/interlock/internal/aes
-func encryptOFB(key []byte, iv []byte, input *os.File, output *os.File) (err error) {
+func encryptCTR(key []byte, iv []byte, input *os.File, output *os.File) (err error) {
 	block, err := aes.NewCipher(key)
 
 	if err != nil {
 		return
 	}
 
-	_, err = output.Write(iv)
-
-	if err != nil {
+	if _, err = output.Write(iv); err != nil {
 		return
 	}
 
 	mac := hmac.New(sha256.New, key)
 	mac.Write(iv)
 
-	stream := cipher.NewOFB(block, iv)
+	stream := cipher.NewCTR(block, iv)
 	buf := make([]byte, 32*1024)
 
 	for {
@@ -287,8 +253,7 @@ func encryptOFB(key []byte, iv []byte, input *os.File, output *os.File) (err err
 	return
 }
 
-// adapted from github.com/usbarmory/interlock/internal/aes
-func decryptOFB(key []byte, iv []byte, input *os.File, output *os.File) (err error) {
+func decryptCTR(key []byte, iv []byte, input *os.File, output *os.File) (err error) {
 	block, err := aes.NewCipher(key)
 
 	if err != nil {
@@ -314,16 +279,14 @@ func decryptOFB(key []byte, iv []byte, input *os.File, output *os.File) (err err
 	limit := stat.Size() - headerSize - macSize
 
 	ciphertextReader := io.LimitReader(input, limit)
-	_, err = io.Copy(mac, ciphertextReader)
 
-	if err != nil {
+	if _, err = io.Copy(mac, ciphertextReader); err != nil {
 		return
 	}
 
 	inputMac := make([]byte, mac.Size())
-	_, err = input.ReadAt(inputMac, stat.Size()-macSize)
 
-	if err != nil {
+	if _, err = input.ReadAt(inputMac, stat.Size()-macSize); err != nil {
 		return
 	}
 
@@ -331,12 +294,10 @@ func decryptOFB(key []byte, iv []byte, input *os.File, output *os.File) (err err
 		return errors.New("invalid HMAC")
 	}
 
-	stream := cipher.NewOFB(block, iv)
+	stream := cipher.NewCTR(block, iv)
 	writer := &cipher.StreamWriter{S: stream, W: output}
 
-	_, err = input.Seek(headerSize, 0)
-
-	if err != nil {
+	if _, err = input.Seek(headerSize, 0); err != nil {
 		return
 	}
 
